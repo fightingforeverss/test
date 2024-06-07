@@ -1,0 +1,327 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define HASH_SIZE 101
+
+typedef struct {
+	char name[60];
+	int cook;
+	int maxst;
+	int curst;
+	int nextc;
+} Food;
+
+typedef struct {
+	char name[60];
+	char foods[20][60];
+	int count;
+} Meal;
+
+typedef struct {
+	char time[21];
+	char name[60];
+	int hour;
+	int min;
+	int sec;
+	int comp;
+	int isw;
+	int indx;
+	Meal meal;
+} Order;
+
+typedef struct {
+	int indx;
+	char comp[21];
+	int done;
+} OrderResult;
+
+Food food[HASH_SIZE];
+Meal meal[HASH_SIZE];
+Order ord[54002], wait[54002];
+OrderResult ordr[54002];
+
+typedef struct HashNode {
+	char key[60];
+	int index;
+	struct HashNode *next;
+} HashNode;
+
+HashNode *foodHashTable[HASH_SIZE];
+HashNode *mealHashTable[HASH_SIZE];
+
+unsigned int hash(const char *key) {
+	unsigned int hashValue = 0;
+	while (*key != '\0') {
+		hashValue = (hashValue << 5) + *key++;
+	}
+	return hashValue % HASH_SIZE;
+}
+
+void insertHash(HashNode *hashTable[], const char *key, int index) {
+	unsigned int hashValue = hash(key);
+	HashNode *newNode = (HashNode *)malloc(sizeof(HashNode));
+	strcpy(newNode->key, key);
+	newNode->index = index;
+	newNode->next = hashTable[hashValue];
+	hashTable[hashValue] = newNode;
+}
+
+int findHash(HashNode *hashTable[], const char *key) {
+	unsigned int hashValue = hash(key);
+	HashNode *node = hashTable[hashValue];
+	while (node != NULL) {
+		if (strcmp(node->key, key) == 0) {
+			return node->index;
+		}
+		node = node->next;
+	}
+	return -1;
+}
+
+void parsem(const char *fname, int *fc, int *mc, Food food[], Meal meal[], int *W1, int *W2) {
+	FILE *file = fopen(fname, "r");
+	if (!file) {
+		perror("无法打开菜单文件");
+		exit(EXIT_FAILURE);
+	}
+	
+	fscanf(file, "%d %d", fc, mc);
+	
+	for (int i = 0; i < *fc; ++i) {
+		fscanf(file, "%s", food[i].name);
+		insertHash(foodHashTable, food[i].name, i);
+	}
+	
+	for (int i = 0; i < *fc; ++i) {
+		fscanf(file, "%d", &food[i].cook);
+	}
+	
+	for (int i = 0; i < *fc; ++i) {
+		fscanf(file, "%d", &food[i].maxst);
+		food[i].curst = 0;
+		food[i].nextc = 0;
+	}
+	
+	fscanf(file, "%d %d", W1, W2);
+	
+	char line[256];
+	fgets(line, sizeof(line), file);
+	line[strcspn(line, "\n")] = '\0';
+	for (int i = 0; i < *mc; ++i) {
+		if (fgets(line, sizeof(line), file)) {
+			line[strcspn(line, "\n")] = '\0';
+			char *token = strtok(line, " ");
+			if (token != NULL) {
+				strcpy(meal[i].name, token);
+				meal[i].count = 0;
+				insertHash(mealHashTable, meal[i].name, i);
+				token = strtok(NULL, " ");
+				while (token != NULL && meal[i].count < 20) {
+					strcpy(meal[i].foods[meal[i].count++], token);
+					token = strtok(NULL, " ");
+				}
+			}
+		}
+	}
+	fclose(file);
+}
+
+int findf(const char *fname) {
+	return findHash(foodHashTable, fname);
+}
+
+int findm(const char *mname) {
+	return findHash(mealHashTable, mname);
+}
+
+void parseo(int *oc, Order ord[], int fc, Food food[], int mc, Meal meal[]) {
+	scanf("%d", oc);
+	
+	for (int i = 0; i < *oc; ++i) {
+		scanf("%s %s", ord[i].time, ord[i].name);
+		sscanf(ord[i].time, "%d:%d:%d", &ord[i].hour, &ord[i].min, &ord[i].sec);
+		ord[i].comp = ord[i].hour * 3600 + ord[i].min * 60 + ord[i].sec;
+		ord[i].isw = 0;
+		ord[i].indx = i;
+		int fidx = findf(ord[i].name);
+		if (fidx != -1) {
+			strcpy(ord[i].meal.name, ord[i].name);
+			ord[i].meal.count = 1;
+		} else {
+			int midx = findm(ord[i].name);
+			if (midx != -1) {
+				ord[i].meal = meal[midx];
+			}
+		}
+	}
+}
+
+void initf(int fc, Food food[]) {
+	for (int i = 0; i < fc; ++i) {
+		food[i].curst = 0;
+		food[i].nextc = 7 * 3600;
+	}
+}
+
+void managef(int time, int fc, Food food[]) {
+	for (int i = 0; i < fc; ++i) {
+		if (food[i].curst >= food[i].maxst) {
+			food[i].nextc = time;
+		}
+		
+		if (time >= food[i].nextc + food[i].cook) {
+			if (food[i].curst < food[i].maxst) {
+				food[i].curst++;
+				food[i].nextc = time;
+			}
+		}
+	}
+}
+
+void removef(Meal *m, const char *fname) {
+	for (int i = 0; i < m->count; ++i) {
+		if (strcmp(m->foods[i], fname) == 0) {
+			for (int j = i; j < m->count - 1; ++j) {
+				strcpy(m->foods[j], m->foods[j + 1]);
+			}
+			m->count--;
+			break;
+		}
+	}
+}
+
+void handlew(int time, int *wc, Order wait[], int fc, Food food[], OrderResult ordr[], int *pc) {
+	for (int i = 0; i < *wc; ++i) {
+		if (wait[i].isw) {
+			int fidx = findf(wait[i].meal.name);
+			if (fidx != -1) {
+				if (food[fidx].curst > 0) {
+					food[fidx].curst--;
+					wait[i].meal.count--;
+					if (wait[i].meal.count == 0) {
+						wait[i].isw = 0;
+						(*pc)--;
+						ordr[wait[i].indx].done = 1;
+						sprintf(ordr[wait[i].indx].comp, "%02d:%02d:%02d", time / 3600, (time % 3600) / 60, time % 60);
+					}
+				}
+			} else {
+				for (int j = 0; j < wait[i].meal.count; ++j) {
+					fidx = findf(wait[i].meal.foods[j]);
+					if (fidx != -1 && food[fidx].curst > 0) {
+						food[fidx].curst--;
+						removef(&wait[i].meal, wait[i].meal.foods[j]);
+						j--;
+					}
+				}
+				
+				if (wait[i].meal.count == 0) {
+					wait[i].isw = 0;
+					(*pc)--;
+					ordr[wait[i].indx].done = 1;
+					sprintf(ordr[wait[i].indx].comp, "%02d:%02d:%02d", time / 3600, (time % 3600) / 60, time % 60);
+				}
+			}
+		}
+	}
+}
+
+int process(int idx, int time, int fc, Food food[], int mc, Meal meal[], Order ord[], OrderResult ordr[]) {
+	int succ = 1;
+	int fidx = findf(ord[idx].name);
+	
+	if (fidx != -1) {
+		if (food[fidx].curst > 0) {
+			food[fidx].curst--;
+			ord[idx].meal.count--;
+		} else {
+			succ = 0;
+		}
+	} else {
+		int midx = findm(ord[idx].name);
+		if (midx != -1) {
+			succ = 1;
+			for (int j = 0; j < meal[midx].count; ++j) {
+				fidx = findf(meal[midx].foods[j]);
+				if (fidx != -1 && food[fidx].curst > 0) {
+					food[fidx].curst--;
+					removef(&ord[idx].meal, meal[midx].foods[j]);
+				} else {
+					succ = 0;
+				}
+			}
+		} else {
+			succ = 0;
+		}
+	}
+	
+	if (succ) {
+		ordr[idx].done = 1;
+		sprintf(ordr[idx].comp, "%02d:%02d:%02d", time / 3600, (time % 3600) / 60, time % 60);
+	}
+	
+	return succ;
+}
+
+void processo(int fc, Food food[], int mc, Meal meal[], int oc, Order ord[], Order wait[], OrderResult ordr[], int wc, int W1, int W2, int pc, int sysc) {
+	int lastt = -1;
+	int oidx = 0;
+	
+	for (int time = 7 * 3600; time < 24 * 3600; ++time) {
+		managef(time, fc, food);
+		handlew(time, &wc, wait, fc, food, ordr, &pc);
+		
+		if (sysc && pc < W2) {
+			sysc = 0;
+			lastt = time;
+		}
+		
+		if (oidx < oc) {
+			int otime = ord[oidx].hour * 3600 + ord[oidx].min * 60 + ord[oidx].sec;
+			
+			if (otime > 22 * 3600 && otime == time) {
+				ordr[ord[oidx].indx].done = 0;
+				strcpy(ordr[ord[oidx].indx].comp, "Fail");
+				oidx++;
+			} else if (otime == time) {
+				if (sysc || (lastt == time)) {
+					ordr[ord[oidx].indx].done = 0;
+					strcpy(ordr[ord[oidx].indx].comp, "Fail");
+				} else {
+					if (!process(oidx, time, fc, food, mc, meal, ord, ordr)) {
+						ord[oidx].isw = 1;
+						wait[wc++] = ord[oidx];
+						pc++;
+						if (pc > W1) {
+							sysc = 1;
+						}
+					} else {
+						ordr[ord[oidx].indx].done = 1;
+						sprintf(ordr[ord[oidx].indx].comp, "%02d:%02d:%02d", time / 3600, (time % 3600) / 60, time % 60);
+					}
+				}
+				oidx++;
+			}
+		}
+	}
+	
+	for (int i = 0; i < oc; ++i) {
+		if (ordr[i].done) {
+			printf("%s\n", ordr[i].comp);
+		} else {
+			printf("Fail\n");
+		}
+	}
+}
+
+int main() {
+	int fc, mc, W1, W2, oc, wc = 0, pc = 0, sysc = 0;
+	
+	parsem("dict.dic", &fc, &mc, food, meal, &W1, &W2);
+	parseo(&oc, ord, fc, food, mc, meal);
+	initf(fc, food);
+	processo(fc, food, mc, meal, oc, ord, wait, ordr, wc, W1, W2, pc, sysc);
+	
+	return 0;
+}
