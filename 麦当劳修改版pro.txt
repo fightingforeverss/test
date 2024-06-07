@@ -1,0 +1,335 @@
+#include <stdio.h>   // 包含标准输入输出头文件
+#include <stdlib.h>  // 包含标准库头文件
+#include <string.h>  // 包含字符串处理函数头文件
+
+// 定义各种常量
+#define MAX_FOOD_LEN 60
+#define MAX_MEAL_LEN 60
+#define MAX_FOODS 101
+#define MAX_MEALS 101
+#define MAX_TIME_LEN 20
+#define MAX_NAME_LEN 60
+#define MAX_ORDERS 54002
+#define MAX_WAIT_ORDERS 54002
+#define MAX_MEAL_ITEMS 20
+
+// 定义食物结构体
+typedef struct {
+	char name[MAX_FOOD_LEN];  // 食物名称
+	int cook_time;            // 烹饪时间
+	int max_store;            // 最大存储量
+	int curr_store;           // 当前存储量
+	int next_cook;            // 下次制作时间
+} Food;
+
+// 定义套餐结构体
+typedef struct {
+	char name[MAX_MEAL_LEN];                       // 套餐名称
+	char food_names[MAX_MEAL_ITEMS][MAX_FOOD_LEN]; // 包含的食物名称
+	int food_count;                                // 食物数量
+} Meal;
+
+// 定义订单结构体
+typedef struct {
+	char time[MAX_TIME_LEN + 1]; // 订单时间
+	char name[MAX_NAME_LEN];     // 订单名称
+	int hour;                    // 小时
+	int minute;                  // 分钟
+	int second;                  // 秒
+	int complete_time;           // 订单完成时间
+	int is_wait;                 // 是否在等待
+	int idx;                     // 订单索引
+	Meal meal;                   // 顾客的点餐
+} Order;
+
+// 定义订单结果结构体
+typedef struct {
+	int idx;                             // 订单索引
+	char complete_time[MAX_TIME_LEN + 1]; // 完成时间
+	int is_done;                         // 是否完成
+} OrderResult;
+
+// 全局变量定义
+int food_cnt, meal_cnt; // 食物和套餐的数量
+Food foods[MAX_FOODS];  // 食物数组
+Meal meals[MAX_MEALS];  // 套餐数组
+int order_cnt;          // 订单数量
+Order orders[MAX_ORDERS]; // 订单数组
+Order wait_orders[MAX_WAIT_ORDERS]; // 等待中的订单数组
+OrderResult order_res[MAX_ORDERS]; // 订单结果数组
+int wait_cnt = 0;         // 等待订单的数量
+int W1, W2; // 系统阈值
+int pending_cnt = 0;      // 待处理订单数
+int system_closed = 0;    // 系统是否关闭
+
+// 解析菜单文件
+void parse_menu(const char *filename) {
+	FILE *file = fopen(filename, "r"); // 打开文件
+	if (!file) { // 如果文件打开失败
+		perror("无法打开菜单文件"); // 输出错误信息
+		exit(EXIT_FAILURE); // 退出程序
+	}
+	
+	fscanf(file, "%d %d", &food_cnt, &meal_cnt); // 读取食物和套餐的数量
+	
+	for (int i = 0; i < food_cnt; ++i) {
+		fscanf(file, "%s", foods[i].name); // 读取每种食物的名称
+	}
+	
+	for (int i = 0; i < food_cnt; ++i) {
+		fscanf(file, "%d", &foods[i].cook_time); // 读取每种食物的烹饪时间
+	}
+	
+	for (int i = 0; i < food_cnt; ++i) {
+		fscanf(file, "%d", &foods[i].max_store); // 读取每种食物的最大存储量
+		foods[i].curr_store = 0; // 初始化当前存储量为0
+		foods[i].next_cook = 0;  // 初始化下次制作时间为0
+	}
+	
+	fscanf(file, "%d %d", &W1, &W2); // 读取系统打开和关闭的阈值
+	
+	char line[256]; // 定义缓冲区
+	fgets(line, sizeof(line), file); // 读取文件剩余部分
+	line[strcspn(line, "\n")] = '\0'; // 移除换行符
+	for (int i = 0; i < meal_cnt; ++i) { // 读取每个套餐的信息
+		if (fgets(line, sizeof(line), file)) {
+			line[strcspn(line, "\n")] = '\0'; // 移除换行符
+			char *token = strtok(line, " "); // 分割字符串
+			if (token != NULL) {
+				strcpy(meals[i].name, token); // 读取套餐名称
+				meals[i].food_count = 0; // 初始化食物数量
+				token = strtok(NULL, " "); // 获取下一个token
+				while (token != NULL && meals[i].food_count < MAX_MEAL_ITEMS) {
+					strcpy(meals[i].food_names[meals[i].food_count++], token); // 读取食物名称
+					token = strtok(NULL, " ");
+				}
+			}
+		}
+	}
+	fclose(file); // 关闭文件
+}
+
+// 查找食物索引
+int find_food_idx(const char *food_name) {
+	for (int i = 0; i < food_cnt; ++i) {
+		if (strcmp(foods[i].name, food_name) == 0) { // 比较食物名称
+			return i; // 返回索引
+		}
+	}
+	return -1; // 没有找到返回-1
+}
+
+// 解析订单文件
+void parse_orders() {
+	
+	scanf("%d", &order_cnt); // 读取订单数量
+	
+	for (int i = 0; i < order_cnt; ++i) {
+		scanf( "%s %s", orders[i].time, orders[i].name); // 读取订单时间和名称
+		sscanf(orders[i].time, "%d:%d:%d", &orders[i].hour, &orders[i].minute, &orders[i].second); // 解析时间
+		orders[i].complete_time = orders[i].hour * 3600 + orders[i].minute * 60 + orders[i].second; // 计算完成时间
+		orders[i].is_wait = 0; // 初始化是否等待标志
+		orders[i].idx = i; // 订单索引
+		int food_idx = find_food_idx(orders[i].name); // 查找食物索引
+		if (food_idx != -1) {
+			strcpy(orders[i].meal.name, orders[i].name); // 设置食物名称
+			orders[i].meal.food_count = 1; // 单点食物数量为1
+		} else {
+			for (int j = 0; j < meal_cnt; ++j) {
+				if (strcmp(meals[j].name, orders[i].name) == 0) {
+					orders[i].meal = meals[j]; // 设置套餐
+					break;
+				}
+			}
+		}
+	}
+}
+
+// 初始化食物存储
+void init_food_store() {
+	for (int i = 0; i < food_cnt; ++i) {
+		foods[i].curr_store = 0; // 当前存储量设为0
+		foods[i].next_cook = 7 * 3600; // 下次制作时间设为7:00
+	}
+}
+
+// 管理食物存储
+void manage_food_store(int curr_time) {
+	for (int i = 0; i < food_cnt; ++i) {
+		if (foods[i].curr_store >= foods[i].max_store) {
+			foods[i].next_cook = curr_time; // 如果存储已满，更新下次制作时间
+		}
+		
+		if (curr_time >= foods[i].next_cook + foods[i].cook_time) {
+			if (foods[i].curr_store < foods[i].max_store) {
+				foods[i].curr_store++; // 增加当前存储量
+				foods[i].next_cook = curr_time; // 更新下次制作时间
+			}
+		}
+	}
+}
+
+// 从套餐中移除食物
+void remove_food_from_meal(Meal *meal, const char *food_name) {
+	for (int i = 0; i < meal->food_count; ++i) {
+		if (strcmp(meal->food_names[i], food_name) == 0) {
+			for (int j = i; j < meal->food_count - 1; ++j) {
+				strcpy(meal->food_names[j], meal->food_names[j + 1]); // 移除食物
+			}
+			meal->food_count--; // 减少食物数量
+			break;
+		}
+	}
+}
+
+// 处理等待中的订单
+void handle_wait_orders(int curr_time) { // 当前时间传入函数
+	for (int i = 0; i < wait_cnt; ++i) { // 遍历所有等待中的订单
+		if (wait_orders[i].is_wait) { // 如果订单在等待
+			int food_idx = find_food_idx(wait_orders[i].meal.name); // 查找订单中食物的索引
+			if (food_idx != -1) { // 单点订单处理
+				if (foods[food_idx].curr_store > 0) { // 如果当前存储量大于0
+					foods[food_idx].curr_store--; // 减少当前存储量
+					wait_orders[i].meal.food_count--; // 减少订单中的食物数量
+					if (wait_orders[i].meal.food_count == 0) { // 如果订单中的食物数量为0，说明订单完成
+						wait_orders[i].is_wait = 0; // 设置订单为不再等待
+						pending_cnt--; // 减少待处理订单计数
+						order_res[wait_orders[i].idx].is_done = 1; // 设置订单结果为完成
+						// 设置订单完成时间
+						sprintf(order_res[wait_orders[i].idx].complete_time, "%02d:%02d:%02d", curr_time / 3600, (curr_time % 3600) / 60, curr_time % 60);
+					}
+				}
+			} else { // 套餐订单处理
+				for (int j = 0; j < wait_orders[i].meal.food_count; ++j) { // 遍历套餐中的每个食物
+					food_idx = find_food_idx(wait_orders[i].meal.food_names[j]); // 查找套餐中食物的索引
+					if (food_idx != -1 && foods[food_idx].curr_store > 0) { // 如果食物存在且存储量大于0
+						foods[food_idx].curr_store--; // 减少当前存储量
+						// 从套餐中移除这个食物
+						remove_food_from_meal(&wait_orders[i].meal, wait_orders[i].meal.food_names[j]);
+						j--; // 减少索引以继续检查下一项
+					}
+				}
+				
+				if (wait_orders[i].meal.food_count == 0) { // 如果套餐中的所有食物都处理完
+					wait_orders[i].is_wait = 0; // 设置订单为不再等待
+					pending_cnt--; // 减少待处理订单计数
+					order_res[wait_orders[i].idx].is_done = 1; // 设置订单结果为完成
+					// 设置订单完成时间
+					sprintf(order_res[wait_orders[i].idx].complete_time, "%02d:%02d:%02d", curr_time / 3600, (curr_time % 3600) / 60, curr_time % 60);
+				}
+			}
+		}
+	}
+}
+
+// 处理订单
+int process_order(int order_idx, int curr_time) {
+	int success = 1; // 初始化处理结果为成功
+	int food_idx = find_food_idx(orders[order_idx].name); // 查找订单中食物的索引
+	
+	if (food_idx != -1) { // 单点订单处理
+		if (foods[food_idx].curr_store > 0) { // 如果当前存储量大于0
+			foods[food_idx].curr_store--; // 减少当前存储量
+			orders[order_idx].meal.food_count--; // 减少订单中的食物数量
+		} else {
+			success = 0; // 存储不足，处理失败
+		}
+	} else { // 套餐订单处理
+		int meal_idx = -1; // 初始化套餐索引为-1
+		for (int i = 0; i < meal_cnt; ++i) { // 遍历所有套餐
+			if (strcmp(meals[i].name, orders[order_idx].name) == 0) { // 找到对应的套餐
+				meal_idx = i; // 设置套餐索引
+				break;
+			}
+		}
+		
+		if (meal_idx != -1) { // 如果找到了对应的套餐
+			success = 1; // 默认认为套餐完全满足
+			for (int j = 0; j < meals[meal_idx].food_count; ++j) { // 遍历套餐中的每个食物
+				food_idx = find_food_idx(meals[meal_idx].food_names[j]); // 查找套餐中食物的索引
+				if (food_idx != -1 && foods[food_idx].curr_store > 0) { // 如果食物存在且存储量大于0
+					foods[food_idx].curr_store--; // 减少当前存储量
+					// 从订单的套餐中移除这个食物
+					remove_food_from_meal(&orders[order_idx].meal, meals[meal_idx].food_names[j]);
+				} else {
+					success = 0; // 存储不足或食物不存在，处理失败
+				}
+			}
+		} else {
+			success = 0; // 没有找到对应的套餐
+		}
+	}
+	
+	if (success) {
+		order_res[order_idx].is_done = 1; // 订单完成
+		// 设置订单完成时间
+		sprintf(order_res[order_idx].complete_time, "%02d:%02d:%02d", curr_time / 3600, (curr_time % 3600) / 60, curr_time % 60);
+	}
+	
+	return success; // 返回处理结果
+}
+
+
+void process_orders() {
+	int last_open_time = -1; // 记录上次系统打开的时间
+	int order_index = 0; // 当前处理的订单索引
+	
+	for (int curr_time = 7 * 3600; curr_time < 24 * 3600; ++curr_time) { // 从7:00开始到24:00结束
+		manage_food_store(curr_time); // 管理食物存储
+		handle_wait_orders(curr_time); // 处理等待中的订单
+		
+		if (system_closed && pending_cnt < W2) { // 检查系统是否需要重新打开
+			system_closed = 0; // 系统重新打开
+			last_open_time = curr_time;
+		}
+		
+		if (order_index < order_cnt) {
+			int order_time = orders[order_index].hour * 3600 + orders[order_index].minute * 60 + orders[order_index].second; // 计算订单时间
+			
+			if (order_time > 22 * 3600 && order_time == curr_time) { // 如果订单时间超过22:00并且当前时间与订单时间匹配
+				order_res[orders[order_index].idx].is_done = 0; // 订单处理失败
+				strcpy(order_res[orders[order_index].idx].complete_time, "Fail"); // 设置订单结果为失败
+				order_index++; // 处理下一个订单
+			} else if (order_time == curr_time) { // 如果当前时间与订单时间匹配
+				if (system_closed || (last_open_time == curr_time)) { // 如果系统关闭或刚刚重新打开
+					order_res[orders[order_index].idx].is_done = 0; // 订单处理失败
+					strcpy(order_res[orders[order_index].idx].complete_time, "Fail"); // 设置订单结果为失败
+				} else {
+					if (!process_order(order_index, curr_time)) { // 尝试处理订单，如果失败
+						orders[order_index].is_wait = 1; // 将订单设置为等待状态
+						wait_orders[wait_cnt++] = orders[order_index]; // 添加到等待队列
+						pending_cnt++; // 增加待处理订单计数
+						if (pending_cnt > W1) { // 如果待处理订单数超过关闭阈值
+							system_closed = 1; // 系统关闭
+						}
+					} else {
+						order_res[orders[order_index].idx].is_done = 1; // 订单处理成功
+						sprintf(order_res[orders[order_index].idx].complete_time, "%02d:%02d:%02d", curr_time / 3600, (curr_time % 3600) / 60, curr_time % 60); // 设置订单完成时间
+					}
+				}
+				order_index++; // 处理下一个订单
+			} 
+		}
+	}
+	
+	for (int i = 0; i < order_cnt; ++i) { // 遍历所有订单结果
+		if (order_res[i].is_done) { // 如果订单处理成功
+			printf("%s\n", order_res[i].complete_time); // 输出订单完成时间
+		} else {
+			printf("Fail\n"); // 输出订单处理失败
+		}
+	}
+}
+
+
+
+
+// 主函数
+int main() {
+	parse_menu("dict.dic"); // 解析菜单文件
+	parse_orders(); // 解析订单文件
+	init_food_store(); // 初始化食物存储
+	process_orders(); // 处理所有订单
+	
+	return 0;
+}
